@@ -6,13 +6,7 @@ Stručný validační report obrazového vyhodnocení lokální geometrie ploch�
 
 ## 1. Cíl
 
-Z obrazu ploché kapky je potřeba robustně určit zejména:
-
-- výšku kapky `h`,
-- lokální meridionální poloměr křivosti `Rθ`,
-- geometrickou referenci okraje misky (`rim`).
-
-Pro lokální fit se používají rektifikované souřadnice
+Z obrazu ploché kapky je potřeba robustně určit zejména výšku kapky `h`, lokální meridionální poloměr křivosti `Rθ` a geometrickou referenci okraje misky (`rim`). Pro lokální fit se používají rektifikované souřadnice
 
 ```text
 q = x0 - x
@@ -37,7 +31,7 @@ První snímek série bude pořízen bez kapaliny při stejné, následně nehyb
 
 **Důležitý experimentální poznatek:** při větší kapce osvětlení opticky zvýrazňuje spodní hranu misky a vytváří dojem, že rim leží níže. Výšková reference proto nesmí být odvozena z této světlé spodní hrany na snímku s kapalinou. `y0` odpovídá skutečné úrovni, kde začíná liquid-air interface.
 
-![Interpretace rim reference](figures/01-rim-reference.jpg)
+![Schéma rim reference](figures/01-rim-reference.svg)
 
 ### Snímky s kapalinou
 
@@ -59,9 +53,7 @@ Na stejném snímku `frame_046` byly porovnány čtyři způsoby určení horizo
 | Gradient centroid | 115.757 | 1.719 | 1.309 | bez zlepšení proti kvadratické interpolaci |
 | Logistic intensity-edge fit | 113.758 | 2.207 | 2.224 | na tomto snímku méně stabilní |
 
-![Porovnání extrahovaných kontur](figures/02-edge-methods.jpg)
-
-![Stabilita metod při změně šířky fitu](figures/03-edge-stability.jpg)
+![Porovnání metod detekce rozhraní](figures/02-edge-methods.svg)
 
 ### Volba
 
@@ -80,7 +72,7 @@ q = a z² + b z⁴
 
 a sleduje se významnost vyššího členu.
 
-![Významnost členu čtvrtého řádu](figures/04-quartic-criterion.jpg)
+![Významnost členu čtvrtého řádu](figures/04-quartic-criterion.svg)
 
 Pro aktuální `frame_046` vznikl při pracovní referenci souvislý blok splňující `|b| < 2σb` pro:
 
@@ -98,27 +90,19 @@ full range = 1.354 px
 relative full range = 1.145 %
 ```
 
-![Kandidátní blok lokálního fitu](figures/05-fit-window.jpg)
+![Kandidátní blok lokálního fitu](figures/05-fit-window.svg)
 
 Samotné kritérium `|b| < 2σb` ještě není dostačující pro finální automatickou volbu. Má být kombinováno s explicitním kritériem stability `Rθ` v souvislém bloku přijatelných intervalů. Numerická definice této stability je zatím otevřený bod.
 
 ## 5. Citlivost na geometrickou referenci
 
-Nejvýznamnějším praktickým problémem z dosavadních testů není samotná parabola, ale přesná poloha geometrického počátku.
+Nejvýznamnějším praktickým problémem z dosavadních testů není samotná parabola, ale přesná poloha geometrického počátku. U `frame_046` změna pracovní výškové reference o 1 px v okolí zvolené hodnoty změnila fitted `Rθ` přibližně o 3 px.
 
-![Citlivost na výšku rim y0](figures/06-y0-sensitivity.jpg)
+![Citlivost na výšku rim y0](figures/06-y0-sensitivity.svg)
 
-![Citlivost na radiální referenci x0](figures/07-x0-sensitivity.jpg)
+Z toho plyne hlavní návrhové rozhodnutí: **statickou geometrii misky určit z dry reference frame a nepřizpůsobovat ji každému snímku kapky samostatně.** Radiální reference `x0` musí být rovněž geometricky kalibrována, nikoli dopočítávána z kapky.
 
-Z toho plyne hlavní návrhové rozhodnutí: **statickou geometrii misky určit z dry reference frame a nepřizpůsobovat ji každému snímku kapky samostatně.**
-
-## 6. Rezidua
-
-Rezidua lokálního parabolického fitu nejsou při libovolném rozšíření intervalu náhodná; při příliš dlouhém intervalu se začíná projevovat systematická odchylka od lokální paraboly. To podporuje použití adaptivní volby fitovacího okna.
-
-![Rezidua parabolického fitu](figures/08-residuals.jpg)
-
-## 7. Současná doporučená pipeline
+## 6. Současná doporučená pipeline
 
 ```text
 DRY REFERENCE FRAME
@@ -147,7 +131,7 @@ LIQUID FRAME
        Rθ = 1/(2a)
 ```
 
-## 8. Co je ověřeno a co ještě ne
+## 7. Co je ověřeno a co ještě ne
 
 **Ověřeno na poskytnutém snímku:**
 
@@ -166,7 +150,7 @@ LIQUID FRAME
 - převod px → mm a úplná propagace nejistot,
 - opakovatelnost pro více naplnění a více měřicích sérií.
 
-## 9. Data a implementace
+## 8. Data a implementace
 
 - [Numerická diagnostika fitovacích oken](results/frame046-fit-window-diagnostics.csv)
 - [Porovnání detekčních metod](results/edge-method-comparison.csv)
