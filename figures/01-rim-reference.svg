@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="430" viewBox="0 0 900 430">
+  <rect width="900" height="430" fill="white"/>
+  <text x="30" y="35" font-family="sans-serif" font-size="24" font-weight="bold">Rim reference: geometry, not the bright lower ledge</text>
+  <rect x="70" y="285" width="650" height="120" fill="#dddddd" stroke="#222" stroke-width="2"/>
+  <path d="M70 185 L500 185 C620 185 690 210 720 285" fill="none" stroke="#222" stroke-width="20" stroke-linecap="round"/>
+  <line x1="70" y1="285" x2="780" y2="285" stroke="#111" stroke-width="2" stroke-dasharray="8 6"/>
+  <line x1="70" y1="340" x2="780" y2="340" stroke="#888" stroke-width="5"/>
+  <circle cx="720" cy="285" r="6" fill="#111"/>
+  <text x="735" y="275" font-family="sans-serif" font-size="18">(x0, y0): start of liquid-air interface</text>
+  <text x="90" y="275" font-family="sans-serif" font-size="18">true rim level / z = 0</text>
+  <text x="90" y="365" font-family="sans-serif" font-size="18" fill="#555">bright lower edge visible in filled frames — do not use as y0</text>
+  <text x="30" y="415" font-family="sans-serif" font-size="15" fill="#555">Schematic based on the observed optical artefact; final geometry is to be calibrated from a dry reference frame.</text>
+</svg>
