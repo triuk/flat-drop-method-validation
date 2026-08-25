@@ -1,0 +1,5 @@
+method,Rtheta_zmax100_px,RMSE_px,SD_Rtheta_zmax70_110_px,assessment
+Integer gradient peak,116.159,1.738,1.130,"Stable, integer-pixel localization"
+Quadratic subpixel gradient peak,115.902,1.695,1.204,"Selected method"
+Gradient centroid,115.757,1.719,1.309,"No improvement over quadratic interpolation"
+Logistic intensity-edge fit,113.758,2.207,2.224,"Less stable on frame_046"
