@@ -1,255 +1,222 @@
 # Implementation specification for `drop-analysis`
 
-This is the **authoritative implementation target** for the flat-drop image-analysis workflow. It is based on the current scientific draft and on validation against a complete exported project containing one dry apparatus reference plus 23 frames acquired while water volume was progressively increased.
+This document is the **authoritative implementation target** for the flat-drop image-analysis workflow. It reflects the current scientific draft, the supplied dry reference, and the complete filling sequence. The production repository `drop-analysis` should implement this specification without importing assumptions from the existing `needle` mode.
 
-Do not silently replace the rules below with assumptions from the existing `needle` analysis mode.
+## 1. Acquisition model
 
-## 1. Supported input project
-
-The validated source project has:
+A project contains:
 
 ```text
-format: drop-analysis-project
-schemaVersion: 11
-reference.file: reference/apparatus_reference.png
-frames[*].file: frames/frame_NNN.png
-frames[*].offsetSeconds: acquisition time relative to burst start
+one dry reference frame
++ a time-ordered sequence of liquid frames
 ```
 
-The current example project stores `analysis.geometryMode = "needle"` and empty `needleFits`. Those fields are **not flat-drop ground truth**. Flat-drop results must be stored separately and must not depend on existing needle-fit values.
+The camera/apparatus is nominally fixed. Water is added progressively so that the sequence passes from underfilled, through the vertical-tangent condition, to overfilled relative to the ideal state.
 
-## 2. Acquisition model and purpose of the filling sequence
+**Every liquid frame must be analyzed independently.** The software may calculate diagnostics and rank/highlight frames, but it must not automatically reduce the sequence to one selected frame. The operator will decide which frames are physically suitable for the final evaluation.
 
-1. Acquire one **dry reference frame** before liquid is added.
-2. Keep the apparatus/camera nominally fixed.
-3. Add liquid slowly and acquire a time-ordered sequence that intentionally passes through:
+The sequence is intentionally useful for two purposes:
 
-```text
-underfilled / tangent not yet vertical
-        ↓
-near-vertical region
-        ↓
-ideal vertical-tangent state
-        ↓
-overfilled relative to the ideal state
-```
+- locating the state closest to a vertical tangent;
+- demonstrating how robust the derived quantities are when the filling is only approximately optimal.
 
-4. Preserve frame timestamps (`offsetSeconds`).
+## 2. Dry reference = source of static apparatus geometry
 
-The sequence has **two purposes**, both of which must be supported by the software:
+The dry reference is the source of truth for quantities that do not belong to the liquid profile.
 
-- locate the optimal state `t0`, where the side profile at the rim is closest to a vertical tangent;
-- quantify robustness around `t0` by analyzing valid neighboring frames before and after the zero crossing.
+Use it to determine:
 
-Therefore, the implementation must **not reduce the sequence to one best frame**. The closest-to-zero frame may be highlighted as the nominal optimum, but valid neighboring frames are intentional experimental data and must remain available for robustness analysis.
+1. **top rim line** — physical reference plane `z = 0`;
+2. **right vertical side of the basin** — independent orientation reference;
+3. **image rotation / rectification**;
+4. **static ROI(s)** for registering liquid frames back to the reference;
+5. **optional spatial scale**;
+6. **optional basin-center marker** as a hint/QC feature.
 
-Even with a nominally fixed camera, registration is required: the validated project shows a measurable image-coordinate offset between the dry reference and the liquid burst.
+![Reference-frame roles](figures/13-reference-roles.svg)
 
-## 3. Coordinate definitions
+### 2.1 Orientation / rectification
 
-Use image coordinates only as intermediate quantities.
+Fit the top rim edge over a wide span and fit the right basin side over a wide vertical span.
 
-After registering each liquid frame to the dry reference and rectifying the rim line, define:
+Default behavior:
 
-```text
-z = 0                 registered physical rim plane
-z > 0                 upward into the drop
-x                      image horizontal coordinate
-x_contact              common pinned contact position for the analyzed sequence
-q = x_contact - x      inward radial displacement on the right side
-```
+- estimate one rigid image rotation from the static reference geometry;
+- after rectification, the top rim should be horizontal and the right side approximately vertical;
+- store residual angles/errors as QC diagnostics.
 
-The physical `Rphi` used in the Young-Laplace formula remains a mechanically/calibrationally defined quantity. Do not infer physical `Rphi` from the fitted image intercept of the liquid profile.
+Do not introduce perspective/projective correction by default. If the two fitted lines cannot be made mutually consistent by a rigid rotation within a configurable tolerance, report this as a geometry/QC condition rather than silently warping the image.
 
-## 4. Dry-reference processing
+### 2.2 Rim height
 
-### 4.1 Rim plane
+The **top rim line from the dry reference** defines the vertical zero.
 
-Detect the upper basin/air silhouette over a wide horizontal span by the strong vertical intensity transition.
+Do not infer rim height from the bright lower ledge visible in strongly illuminated liquid frames. With a large drop this optical feature can appear lower than the physical rim.
 
-Recommended tested procedure:
+### 2.3 Right side
 
-1. light Gaussian smoothing only for edge localization,
-2. compute vertical intensity gradient,
-3. locate the strong air-to-basin edge column-wise,
-4. refine each edge location with three-point quadratic subpixel interpolation,
-5. robustly fit a line `y_rim(x) = p0 + p1*x`,
-6. use that line as the physical `z = 0` plane after registration.
+The right basin side is a static geometric reference for orientation and registration. It is **not automatically identical to the liquid contact x-coordinate**; the actual liquid-air interface begins at the inner sharp edge and a small ledge continues to the right.
 
-On the current dry reference the fitted line was approximately
+Therefore the dry reference defines the static basin geometry, while the liquid profile still determines where the liquid-air interface intersects the rim plane.
 
-```text
-y(x) = 966.627 + 0.000363 x
-```
+### 2.4 Scale
 
-with residual SD about `0.34 px` for the selected strong-edge samples. These are regression-test values for this fixture, not universal constants.
+The graph paper visible on the right side of the reference has **5 mm squares**.
 
-### 4.2 What NOT to derive from the dry silhouette
+Scale calibration is useful but must not block the flat-drop fitting implementation.
 
-Do **not** treat the outer visible silhouette corner as the liquid contact x-coordinate.
+Preferred implementation order:
 
-In the validated apparatus, the liquid-air interface starts on an inner sharp edge and a small ledge continues to the right. The dry silhouette does not directly identify the liquid contact location with sufficient confidence.
+1. allow a stored/manual `px_per_mm` calibration;
+2. optionally implement a simple grid-based calibration from the 5 mm paper;
+3. do not require sophisticated automatic grid analysis for the first flat-drop implementation.
 
-Therefore:
+All image-space results must remain available even if physical scale is not yet resolved.
 
-- dry reference defines the **rim height/plane**, orientation, calibration and static registration ROI;
-- liquid frames define the actual **contact x-position**.
+### 2.5 Hand-marked basin center
 
-### 4.3 Optical lower-edge warning
+A marker on the dry basin indicates its approximate center.
 
-Do not infer rim height from the bright lower ledge visible in strongly illuminated liquid frames. Large drops can over-illuminate this region and make the rim appear lower than it is.
+Treat it as:
 
-## 5. Registration of liquid frames
+- an optional ROI/initialization hint;
+- an optional QC check against other static geometry.
 
-Register every liquid frame to a static ROI from the dry reference before using the dry rim plane.
+Do **not** use the hand mark as a hidden high-precision metrological constraint unless the user explicitly chooses to do so. The physical `Rphi` used by the scientific method remains a mechanically/calibrationally defined quantity.
 
-Do not use the liquid-air interface for registration.
+## 3. Registration of every liquid frame
 
-For the current batch, cross-correlation of gradient profiles from a static background/grid ROI produced reference-to-frame translations of approximately:
+Even though the camera is nominally fixed, register each liquid frame to the dry reference using only static apparatus/background features.
 
-```text
-dx = +1.74 ... +2.22 px
-dy = +1.60 ... +1.81 px
-```
+Do not register from the liquid-air interface.
+
+The supplied batch showed a measurable dry-reference-to-liquid-frame image offset, so copying the dry geometry to identical pixel coordinates is not sufficient.
 
 Implementation requirements:
 
-- translation registration is mandatory;
-- keep the method modular so rotation/affine correction can be added if needed later;
-- save the estimated transform and registration quality metric per frame;
-- registration failure must produce QC failure, not a silent result;
-- thresholds remain configurable until multiple independent sequences are validated.
+- estimate at least translation;
+- apply the transform before using the dry rim plane;
+- save transform + registration quality per frame;
+- expose registration failure/warning explicitly;
+- keep thresholds configurable.
 
-A robust equivalent to the tested gradient-profile cross-correlation is acceptable only if it reproduces the same fixture behavior.
+The reference top/right geometry can also be used as an independent consistency check after registration.
 
-## 6. Plateau height `h`
+## 4. Coordinate system
 
-Plateau estimation and side-curvature estimation are independent tasks.
-
-Use a wide ROI well away from the right curved rim region.
-
-Recommended procedure:
-
-1. detect the upper liquid-air transition using the vertical intensity gradient,
-2. apply subpixel peak localization,
-3. fit a line to the plateau interface if needed,
-4. calculate `h` from the plateau level relative to the **registered dry rim plane**.
-
-On the validated filling batch, image-space `h` increased monotonically from approximately:
+After registration and rectification define:
 
 ```text
-238.78 px  (frame 001)
-281.93 px  (frame 023)
+z = 0       physical top rim plane from dry reference
+z > 0       upward into the liquid
+x           rectified horizontal image coordinate
 ```
 
-This monotonicity is a useful sequence-level QC diagnostic for a monotonic filling experiment, but not a universal requirement for arbitrary sequences.
+Use pixel units internally unless/ until `px_per_mm` is available.
 
-## 7. Side liquid-air interface extraction
+## 5. Plateau height `h`
 
-Use a right-side ROI around the liquid-air boundary.
+Determine plateau and side curvature independently.
+
+For each liquid frame:
+
+1. use a wide ROI away from the right-hand curvature;
+2. locate the upper liquid-air transition by vertical intensity gradient;
+3. refine the edge subpixel-wise;
+4. fit the plateau line/level robustly;
+5. calculate `h` relative to the registered dry `z = 0` rim plane.
+
+Save the plateau fit and its residuals/uncertainty.
+
+For a monotonic filling sequence, `h` should be reported for every frame so the operator can inspect its progression; do not use monotonicity as a universal hard rejection rule.
+
+## 6. Side liquid-air interface extraction
+
+Use a right-side ROI around the curved liquid-air boundary.
 
 For each image row:
 
-1. compute the horizontal intensity gradient,
-2. locate the positive gradient maximum corresponding to liquid -> background,
-3. refine the peak with three-point quadratic subpixel interpolation,
-4. store the resulting interface point.
+1. compute the horizontal intensity gradient;
+2. locate the positive gradient maximum corresponding to liquid -> background;
+3. refine the peak using three-point quadratic subpixel interpolation;
+4. store the subpixel interface coordinate.
 
 ### Selected default
 
 **Horizontal gradient maximum + three-point quadratic subpixel interpolation.**
 
-This was preferred over integer peak, gradient centroid and logistic intensity-edge fitting on the tested image because it retained good fit stability while providing subpixel coordinates; the logistic fit was less stable on the tested data.
+This was the best current compromise on the tested image among:
 
-Keep the extractor modular so alternatives can be compared diagnostically, but do not use the logistic fit as the current default.
+- integer gradient peak;
+- quadratic subpixel gradient peak;
+- gradient centroid;
+- logistic intensity-edge fit.
 
-## 8. Contact-position estimation and pinning QC
+Keep the extractor modular so alternatives can still be compared diagnostically, but do not use the logistic fit as the current default.
 
-The contact x-coordinate must be obtained from liquid frames, not from the outer dry silhouette.
+## 7. Per-frame contact/tangent diagnostic
 
-For each registered liquid frame, over a short configurable near-rim interval, fit
-
-```text
-x(z) = xc_i + s_i*z + c2_i*z^2
-```
-
-with a **free intercept**.
-
-`xc_i` is the extrapolated contact position at the registered physical rim plane `z = 0`.
-
-Sequence-level procedure:
-
-1. collect all `xc_i`,
-2. estimate the dominant common cluster robustly,
-3. define common pinned contact position `x_contact` from that cluster,
-4. flag frames outside the cluster as `contact_position_outlier`.
-
-For the current batch, using a provisional short fit interval of about `10..60 px`:
+For each registered liquid frame, use a short configurable near-rim interval and fit
 
 ```text
-robust median contact x in reference coordinates = 2326.923 px
-MAD                                             = 0.485 px
-frame 023 offset from median                    = +10.265 px
-frame 023 offset                                = 21.17 MAD
+x(z) = xc + s*z + c2*z^2
 ```
 
-The physical cause of the final-frame discontinuity is intentionally **not assumed** by the algorithm. Detect and report the discontinuity; do not label it as depinning/overflow unless separately established.
+with a free intercept.
 
-MAD-based outlier detection is recommended. The exact multiplier must remain configurable; `5 MAD` separates frame 023 from frames 001-022 in the current fixture but is not a universal threshold.
+Outputs:
 
-## 9. Objective vertical-tangent / `t0` detection
+- `xc`: extrapolated intersection of the local interface with `z = 0`;
+- `s`: local tangent/slope diagnostic;
+- fit uncertainty and residuals.
 
-After determining common pinned `x_contact`, fit each valid candidate frame over a short near-rim interval using
+A sequence-level plot of `xc` is useful to reveal contact-position changes, but **do not automatically discard a frame solely because it differs from the main cluster**. Flag it and let the operator decide, unless the actual profile fit itself fails.
+
+The current batch exhibits one strong contact-position change at the final frame; the algorithm should report the discontinuity without assigning an unverified physical cause.
+
+## 8. Vertical-tangent diagnostic
+
+A frame close to the ideal state can also be represented locally by
 
 ```text
 q = c1*z + a*z^2
-q = x_contact - x
 ```
 
-The coefficient `c1` is the directly measured rim-slope diagnostic in these coordinates.
+where the coordinate convention is chosen so that
 
 ```text
-c1 = 0   <=>   vertical tangent at the rim plane
+c1 = 0  <=>  vertical tangent at the rim plane
 ```
 
-Use it to:
+The supplied sequence shows a sign change of this diagnostic between frames 006 and 007, with an interpolated zero near 11.95 s in the current prototype analysis.
 
-1. identify the frame closest to the ideal state;
-2. detect a sign change when the filling sequence passes through the optimum;
-3. interpolate the zero crossing using frame timestamps;
-4. rank valid frames on both sides of `t0` by `abs(c1)` and/or time distance from `t0`.
+Use `c1` to:
 
-For the validated batch:
+- show which frame is closest to the ideal condition;
+- order frames from “before” to “after” the vertical-tangent state;
+- support robustness plots.
 
-```text
-frame 006: c1 ≈ +0.0120
-frame 007: c1 ≈ -0.0047
-linear zero crossing: t0 ≈ 11.95 s
-```
+**Do not use `c1` to automatically select/reject frames.** Every successfully fitted frame remains in the output.
 
-The short-fit interval remains configurable. The current demonstration used approximately `z = 10..60 px`; this is not universal.
+Do not convert `c1` to `DeltaPsi` until the exact angle convention has been explicitly verified against the scientific definition.
 
-### Important interpretation
+## 9. Curvature fit for every frame
 
-A nonzero but small `c1` is **not automatically a failure**. Such frames are deliberately present to test robustness to slightly imperfect filling.
+Every liquid frame that has a usable extracted side interface must receive its own curvature fit.
 
-Do not convert `c1` to an angular deviation `DeltaPsi` until the coordinate/angle convention is explicitly verified against the scientific definition. Store and report `c1` directly in the current implementation.
+The operator, not the software, decides which frames are later accepted for scientific reporting.
 
-## 10. Curvature fitting: do not force the radial intercept
+### 9.1 Free radial intercept
 
-The curvature fit must **not** force the fitted radial intercept to equal a preselected image `x0`.
+Do not force the fitted image intercept to a preselected `x0`.
 
-Curvature depends on derivatives of the profile; a fixed image intercept makes `Rtheta` unnecessarily sensitive to small contact-coordinate errors.
-
-### 10.1 Article-aligned near-vertical model
-
-For frames in the neighborhood of the vertical-tangent state, fit
+For the article-aligned local parabolic fit use
 
 ```text
 x(z) = c0 + c2*z^2
 ```
 
-where `c0` is free.
+with free `c0`.
 
 Then
 
@@ -257,213 +224,199 @@ Then
 Rtheta = 1 / (2*abs(c2))
 ```
 
-in image units before px/mm conversion.
+in pixel units before optional scale conversion.
 
-This is the image-coordinate equivalent of the local parabolic model in the scientific draft; the additive coordinate offset does not affect curvature.
+The free additive intercept does not affect curvature and avoids making `Rtheta` artificially sensitive to a subpixel error in the absolute contact x-position.
 
-### 10.2 General local diagnostic model
+### 9.2 General diagnostic curvature
 
-Also calculate
+Also fit
 
 ```text
 x(z) = c0 + c1*z + c2*z^2
 ```
 
-and curvature at `z = 0`
+and optionally calculate
 
 ```text
 Rtheta_general = (1 + c1^2)^(3/2) / (2*abs(c2))
 ```
 
-Use `Rtheta_general` as a diagnostic/cross-check and for studying small tangent deviations. Do not silently substitute it for the article-aligned reported value unless the scientific method definition is explicitly updated.
+at `z = 0`.
 
-## 11. Adaptive curvature-fit window
+Keep this as a diagnostic/cross-check. Do not silently replace the article-aligned result with it.
+
+## 10. Adaptive local fit window — independently for every frame
 
 Do not use one fixed profile length.
 
-For every frame included in the `t0` robustness neighborhood, sweep progressively increasing `z_max`.
-
-For the article-aligned local fit compare:
+For each frame separately, sweep progressively increasing `z_max` and compare
 
 ```text
 x = c0 + c2*z^2
 x = c0 + c2*z^2 + c4*z^4
 ```
 
-Estimate `sigma_c4` and accept a candidate interval with respect to the higher-order term only when
+Estimate `sigma_c4` and mark a candidate interval as locally parabolic with respect to the higher-order term when
 
 ```text
 abs(c4) < 2*sigma_c4
 ```
 
-This implements the scientific draft criterion `|b| < 2 sigma_b` while keeping the irrelevant absolute radial intercept free.
+This is the implementation form of the scientific-draft criterion `|b| < 2 sigma_b`.
 
-Then:
+For each frame save the **entire fit-window sweep**, not only one chosen window:
 
-1. identify contiguous accepted `z_max` blocks,
-2. evaluate `Rtheta` stability within each block,
-3. choose a final window only from a block satisfying both the higher-order criterion and the stability criterion.
+- `z_min`, `z_max`;
+- number of interface points;
+- `c0`, `c2`, `Rtheta`;
+- uncertainty of `Rtheta`;
+- RMSE;
+- `c4`, `sigma_c4`, `abs(c4)/sigma_c4`;
+- stability diagnostics across neighboring windows.
 
-Still configurable / not universal:
+The program may propose/highlight a preferred stable window, but the full sweep must remain inspectable and the operator must be able to override the choice.
 
-- `z_min`,
-- short contact/tangent diagnostic interval,
-- `z_max` increment,
-- minimum fit points,
-- minimum accepted-block length,
-- `Rtheta` stability threshold,
-- contact-cluster MAD multiplier,
-- registration-quality and registration-shift thresholds.
+Keep configurable:
 
-Do not hide these as undocumented constants.
+- `z_min`;
+- `z_max` increment;
+- minimum fit points;
+- minimum accepted contiguous block length;
+- numerical `Rtheta`-stability threshold.
 
-## 12. Robustness analysis around `t0`
+No currently tested value is universal.
 
-This is a required sequence-level output, not an optional visualization.
+## 11. Required behavior: no automatic scientific frame selection
 
-After contact-position QC and tangent estimation:
+This rule supersedes earlier prototypes that selected a `t0` neighborhood automatically.
 
-1. determine `t0` or the closest-to-zero frame;
-2. define a configurable neighborhood around `t0` using one of these explicitly recorded criteria:
-   - frame count around `t0`,
-   - time window around `t0`, or
-   - maximum `abs(c1)`;
-3. keep valid frames on **both sides** of the optimum;
-4. perform plateau and curvature analysis for each retained frame;
-5. report how `h`, `Rtheta` and, once physical calibration is enabled, derived capillary length / surface tension vary across the neighborhood.
+The final implementation must:
 
-Recommended plots/tables:
+1. process **all liquid frames independently**;
+2. calculate `h`, side profile, tangent diagnostics and curvature diagnostics for each frame;
+3. preserve every successful result;
+4. flag QC conditions without silently deleting the result;
+5. provide ordering/highlighting by `c1`, time, fit quality, contact-position change, etc.;
+6. leave scientific acceptance to the human operator.
+
+This directly supports the intended experiment: compare underfilled, near-ideal and overfilled states and assess robustness around the vertical-tangent condition.
+
+## 12. Required per-frame outputs
+
+Save at least:
+
+- frame index and timestamp;
+- registration transform + quality;
+- registered/rectified rim geometry;
+- plateau level, `h`, uncertainty/fit residual;
+- extracted side-interface points;
+- per-frame contact intercept `xc`;
+- tangent coefficient (`s`/`c1`) + uncertainty;
+- complete adaptive-window sweep;
+- proposed preferred window, if any;
+- `Rtheta` + uncertainty for that proposed window;
+- optional `Rtheta_general`;
+- RMSE;
+- higher-order significance metric;
+- QC flags/warnings;
+- diagnostic overlay.
+
+## 13. Required sequence-level outputs
+
+The sequence view/report should contain all frames and allow the operator to choose.
+
+Save/show at least:
 
 ```text
-c1 vs time
-Rtheta vs time - t0
+h vs frame/time
+xc vs frame/time
+c1 vs frame/time
+Rtheta vs frame/time
 Rtheta vs c1
-h vs time - t0
-later: gamma vs time - t0
-gamma vs c1
+fit-quality/QC status vs frame
 ```
 
-The closest-to-zero frame is the nominal optimum and should be highlighted, but it must not be the only analyzed result.
+When physical scale and the remaining physical inputs are enabled, equivalent plots may be added for derived quantities such as surface tension.
 
-The purpose is to provide direct experimental evidence for the claimed robustness when the filling is only approximately optimal.
+Highlighting the frame nearest `c1 = 0` is useful, but it is advisory only.
 
-## 13. Processing order
+## 14. Diagnostic overlay
 
-Implement the pipeline in this order:
+Every frame should be visually auditable during method development.
+
+Overlay at least:
+
+- registered dry rim plane;
+- reference-derived orientation;
+- plateau edge/fit;
+- extracted side-interface points;
+- contact extrapolation;
+- tangent diagnostic interval;
+- proposed curvature-fit interval;
+- fitted local curve;
+- key numerical values;
+- QC warnings.
+
+A numerical result without a visual overlay should not be the default validation workflow.
+
+## 15. Processing order
 
 ```text
-load project + dry reference + timestamps
+load project
         ↓
-fit dry rim plane and calibration
+process DRY REFERENCE once
+  top rim + right side
+  rotation/rectification
+  registration ROI
+  optional scale / center hint
         ↓
-register every liquid frame to dry reference
+FOR EACH LIQUID FRAME independently
         ↓
-extract plateau → h
+register to dry reference
         ↓
-extract right liquid-air interface
+plateau extraction → h
         ↓
-per-frame free-intercept contact fit → xc_i
+side-interface extraction
         ↓
-robust sequence contact cluster → x_contact
+contact/tangent diagnostic
         ↓
-flag contact-position outliers
+adaptive curvature-window sweep
         ↓
-short fixed-contact tangent fit → c1
+proposed best window + full diagnostics
         ↓
-find c1 zero crossing / closest frame → t0
+store result + overlay
         ↓
-define configurable valid neighborhood around t0
-        ↓
-curvature fit EVERY retained frame
-  with free radial intercept
-        ↓
-adaptive z_max + fourth-order criterion + Rtheta stability
-        ↓
-per-frame h + Rtheta + QC
-        ↓
-sequence robustness report
-  before / at / after t0
+SEQUENCE SUMMARY
+  show all frames; operator chooses
 ```
 
-## 14. Required per-frame outputs
+## 16. Regression behavior from the supplied batch
 
-Save at least:
+Use `results/batch-validation.csv` as a regression fixture for the current apparatus.
 
-- frame index and timestamp,
-- registration transform and quality,
-- registered rim-plane parameters,
-- plateau level and `h`,
-- contact intercept `xc_i`,
-- contact-cluster residual / robust normalized residual,
-- contact-position QC state,
-- tangent coefficient `c1` and its uncertainty,
-- signed time offset from `t0`,
-- whether the frame belongs to the selected robustness neighborhood,
-- selected curvature model,
-- `Rtheta` and uncertainty,
-- optional `Rtheta_general`,
-- selected `z_min` and `z_max`,
-- quadratic-fit RMSE,
-- `c4`, `sigma_c4`, `abs(c4)/sigma_c4`,
-- overall pass/fail state and explicit failure reason.
+A compatible implementation should reproduce the following qualitative behaviors, subject to small numerical differences from edge/registration details:
 
-## 15. Required sequence-level outputs
+- nonzero registration shift between dry reference and liquid frames;
+- increasing plateau height across the progressive filling sequence;
+- a compact contact-position region over most frames with a large change in the final frame;
+- tangent diagnostic changing sign between frames 006 and 007;
+- approximate zero crossing around 11.95 s in the current prototype analysis.
 
-Save at least:
+These are regression checks for this dataset, not universal physical constants.
 
-- common contact-position estimate,
-- robust contact spread (MAD or equivalent),
-- detected `t0` or closest frame if no sign change exists,
-- list of contact-position outliers,
-- ranking of valid frames by `abs(c1)` / distance from `t0`,
-- explicit definition of the selected robustness neighborhood,
-- summary table for all retained frames,
-- plots of `h`, contact position, `c1` and `Rtheta` versus frame/time,
-- `Rtheta` versus `c1`,
-- later, when physical calibration is active, equivalent robustness plots for derived surface tension.
+## 17. Current open parameters
 
-## 16. Diagnostic overlays
+Keep these visible/configurable until more independent sequences are validated:
 
-During method validation, every accepted/rejected result must be visually auditable.
+- registration thresholds;
+- side/profile ROIs;
+- short contact/tangent fit interval;
+- `z_min`;
+- `z_max` increment;
+- minimum fit points;
+- stable-window definition;
+- contact-position warning threshold;
+- optional automatic grid-scale method.
 
-Per-frame overlay should show:
-
-- registered rim plane,
-- extracted interface points,
-- extrapolated/common contact position,
-- short tangent-fit interval,
-- selected curvature-fit interval,
-- fitted local curve,
-- plateau reference,
-- key numerical values and QC flags.
-
-A numerical result without an overlay should not be the default validation output.
-
-## 17. Regression fixture values from the current 23-frame project
-
-Use `results/batch-validation.csv` as a regression fixture.
-
-Expected qualitative and approximate numerical behaviors:
-
-- registration finds a roughly 2 px dry-reference offset, not zero;
-- `h` rises monotonically from about 238.8 to 281.9 px;
-- contact positions for frames 001-022 form one robust cluster;
-- frame 023 is a strong contact-position outlier;
-- tangent coefficient crosses zero between frames 006 and 007;
-- interpolated `t0` is approximately 11.95 s;
-- frames on both sides of this zero crossing must remain available for robustness analysis rather than being discarded solely because `c1 != 0`.
-
-If a new implementation does not reproduce these qualitative and approximate behaviors, inspect edge extraction, registration and coordinate conventions before trusting curvature output.
-
-## 18. Scientific quantities not yet finalized here
-
-The following remain outside the fully validated image-only implementation target:
-
-- definitive px/mm calibration for this source project,
-- final uncertainty propagation to physical `Rtheta`, `h`, capillary length and surface tension,
-- universal `Rtheta` stability threshold,
-- universal contact-outlier threshold,
-- universal definition of the `t0` robustness-neighborhood width,
-- repeatability across independent filling sequences.
-
-The scientific draft defines the target flat-drop relation, the local-parabolic model and the `|b| < 2 sigma_b` criterion. This specification defines how the currently validated image processing should supply geometrical inputs and how the intentionally underfilled-to-overfilled sequence should be used to test robustness around the vertical-tangent optimum.
+The operator must be able to inspect the underlying points and fits rather than being forced to trust hidden constants.
